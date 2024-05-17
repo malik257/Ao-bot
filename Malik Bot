@@ -108,29 +108,18 @@ function decideNextAction()
         end
     end
 
-    if isAttacked then
-        -- Run away and encircle until finding a weaker opponent
-        print(colors.blue .. "Attacked! Running and encircling..." .. colors.reset)
+    if isAttacked and me.energy >= attackingPlayer.energy then
+        -- Attack the attacker with 50% of energy if they have less or equal health
+        print(colors.red .. "Attacking player with ID: " .. attackingPlayer.id .. " with 50% energy." .. colors.reset)
+        local attackEnergy = me.energy * 0.5
+        ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, TargetPlayer = attackingPlayer.id, AttackEnergy = tostring(attackEnergy) })
+    else
+        -- Run away if attacked by a stronger player or no valid target to attack
+        print(colors.blue .. "Attacked by a stronger player or no valid target to attack. Running away..." .. colors.reset)
         local avoidDirection = findAvoidDirection()
         ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = avoidDirection })
-        InAction = false
-    else
-        -- Follow the fixed pattern of going to the extreme right and encircling
-        local approachDirection = findApproachDirection()
-        print(colors.blue .. "Following the fixed pattern..." .. colors.reset)
-        ao.send({ Target = Game, Action = "PlayerMove", Player = ao.id, Direction = approachDirection })
-        InAction = false
-        -- Check if any weaker opponent is within attack range
-        for _, player in ipairs(findNearestPlayers(3)) do
-            if isPlayerInAttackRange(player) and me.energy >= player.energy then
-                -- Attack with 50% power if health is less than or equal
-                print(colors.red .. "Attacking player with ID: " .. player.id .. " with 50% power." .. colors.reset)
-                ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, TargetPlayer = player.id, AttackEnergy = tostring(me.energy * 0.5) })
-                InAction = false
-                return
-            end
-        end
     end
+    InAction = false
 end
 
 -- Handler to update the game state upon receiving game state information.
@@ -169,4 +158,62 @@ Handlers.add(
             ao.send({ Target = ao.id, Action = "AutoPay" })
         elseif (msg.Event == "Tick" or msg.Event == "Started-Game") and not InAction then
             InAction = true
-            ao.send({ Target = Game, Action = "Get
+            ao.send({ Target = Game, Action = "GetGameState" })
+        elseif InAction then
+            print("Previous action still in progress. Skipping.")
+        end
+        print(colors.green .. msg.Event .. ": " .. msg.Data .. colors.reset)
+    end
+)
+
+-- Handler to trigger game state updates.
+Handlers.add(
+    "GetGameStateOnTick",
+    Handlers.utils.hasMatchingTag("Action", "Tick"),
+    function()
+        if not InAction then
+            InAction = true
+            print(colors.gray .. "Getting game state..." .. colors.reset)
+            ao.send({ Target = Game, Action = "GetGameState" })
+        else
+            print("Previous action still in progress. Skipping.")
+        end
+    end
+)
+
+-- Handler to automate payment confirmation when waiting period starts.
+Handlers.add(
+    "AutoPay",
+    Handlers.utils.hasMatchingTag("Action", "AutoPay"),
+    function(msg)
+        print("Auto-paying confirmation fees.")
+        ao.send({ Target = Game, Action = "Transfer", Recipient = Game, Quantity = "1000" })
+    end
+)
+
+-- Handler to automatically attack when hit by another player.
+Handlers.add(
+    "ReturnAttack",
+    Handlers.utils.hasMatchingTag("Action", "Hit"),
+    function(msg)
+        if not InAction then
+            InAction = true
+            local playerEnergy = LatestGameState.Players[ao.id].energy
+            if playerEnergy == nil then
+                print(colors.red .. "Unable to read energy." .. colors.reset)
+                ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Unable to read energy." })
+            elseif playerEnergy == 0 then
+                print(colors.red .. "Player has insufficient energy." .. colors.reset)
+                ao.send({ Target = Game, Action = "Attack-Failed", Reason = "Player has no energy." })
+            else
+                print(colors.red .. "Returning attack with 50% energy." .. colors.reset)
+                local attackEnergy = playerEnergy * 0.5
+                ao.send({ Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(attackEnergy) })
+            end
+            InAction = false
+            ao.send({ Target = ao.id, Action = "Tick" })
+        else
+            print("Previous action still in progress. Skipping.")
+        end
+    end
+)
